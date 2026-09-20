@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.sqlite
+*.sqlite-journal
+osi_citations.csv
+osi_citations.json
+osi_citations.bib
+.env
