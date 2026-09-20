@@ -56,19 +56,36 @@ Verified spot checks: Substack offset 2400 still returns posts dated 2006-05-20
 6. **At least one corrupt date** exists in the migrated data (a post returned
    `0002-08-12`). Year values outside 1990–2100 are dropped rather than trusted.
 
+## Full text (pass F)
+
+Article bodies are retrieved per source, cheapest reliable route first:
+
+| Source | Route |
+|---|---|
+| `wp` | `content.rendered` from the REST payload already stored in `raw` — no extra request |
+| `substack` | archive payload's `body_html` if present; then two candidate post-detail API endpoints; then the article page, read from the `window._preloads` JSON blob, else from the article container |
+| `legacy` | the article page, generic extraction |
+
+Neither Substack post-detail endpoint shape is documented, so both are **probed
+rather than assumed**, and whichever answers is recorded per article in
+`items.text_strategy`. The HTML fallback covers both failing.
+
+Paywalled posts return a preview. Since the archive API reports a `wordcount`
+for every post, a body under 40% of the expected length is recorded as
+`paywalled-preview`, not silently stored as though complete. Under 40 words is
+`unavailable` and no file is written.
+
 ## Tooling
 
-`osi_harvest.py` — single-file harvester. Sources A/B/C, optional D behind
-`--legacy-insecure`, plus pass E which reads the issue-announcement posts'
-`body_html` out of the stored raw JSON and stamps `issue_label` onto every
-article they link to. Writes SQLite (normalized `items` + `raw` JSON), CSV,
-CSL-JSON for Zotero, and BibTeX. Idempotent upserts, so it can be re-run to
-refresh.
-
-`test_offline.py` — exercises parsing, upsert precedence, issue linking and all
-three export formats against synthetic rows, including the known edge cases
-(empty excerpt, corrupt `0002` date, subtitle-only byline, single-name author,
-BibTeX key collision). No network.
+- `osi_harvest.py` — entry point. Passes A/B/C/E, optional D behind
+  `--legacy-insecure`, pass F, and the exports. A bare invocation asks once and
+  then does everything; `--all` skips the question. Idempotent upserts and a
+  resumable text pass, so re-running refreshes rather than rebuilds.
+- `osi_text.py` — HTML→text (stdlib `HTMLParser`, no bs4), filename
+  construction, the `.txt` files, pass F.
+- `osi_export.py` — CSV, Zotero CSL-JSON, BibTeX, Cloudflare D1 SQL.
+- `test_offline.py` — 108 offline checks, including executing the generated D1
+  SQL against a fresh SQLite database to prove it loads and round-trips.
 
 ## Open questions
 

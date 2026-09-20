@@ -8,3 +8,8 @@ osi_citations.csv
 osi_citations.json
 osi_citations.bib
 .env
+osi_zotero.csl.json
+texts/
+text_manifest.csv
+d1_schema.sql
+d1_data.sql

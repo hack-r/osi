@@ -22,22 +22,41 @@ D. (optional) legacy WP     https://archive.theobjectivestandard.com/
 E. Issue grouping pass      reads the "<Season Year> Issue of TOS Is Published!"
    announcement posts out of stored raw JSON and stamps `issue_label` onto every
    article they link to.
+F. Full text                fetches each article body and writes one
+   self-describing .txt per article for text mining (see osi_text.py).
 
 Outputs
 -------
-  osi_citations.sqlite   normalized table `items` (+ raw JSON in `raw`)
+  osi_citations.sqlite   normalized `items` (+ raw JSON in `raw`)
   osi_citations.csv      flat export
-  osi_citations.json     CSL-JSON (drop straight into Zotero / pandoc)
+  osi_zotero.csl.json    CSL-JSON - Zotero: File > Import
   osi_citations.bib      BibTeX
+  texts/*.txt            one file per article, metadata header + body
+  text_manifest.csv      index of the text corpus
+  d1_schema.sql          Cloudflare D1 schema
+  d1_data.sql            Cloudflare D1 data (items/authors/tags[/texts])
 
 Usage
 -----
   pip install requests
-  python osi_harvest.py                      # everything except legacy site
-  python osi_harvest.py --only substack
-  python osi_harvest.py --only wp
-  python osi_harvest.py --legacy-insecure    # also crawl archive.* ignoring TLS
-  python osi_harvest.py --export-only        # re-export from existing sqlite
+
+  python osi_harvest.py          # everything: asks once, then all passes and
+                                 # all exports. Answer no and it asks about
+                                 # each pass instead.
+  python osi_harvest.py --all    # everything, no questions (for cron/CI)
+
+Everything below is for partial and repeat runs:
+
+  python osi_harvest.py --only substack        # TOS only
+  python osi_harvest.py --only wp              # objectivestandard.org only
+  python osi_harvest.py --fulltext-only        # pass F alone, resumable
+  python osi_harvest.py --fulltext-only --text-limit 20    # trial run
+  python osi_harvest.py --export-only          # no network, re-export
+  python osi_harvest.py --export-only --d1-include-text    # bodies into D1
+  python osi_harvest.py --legacy-insecure      # also crawl archive.* (TLS off)
+
+Re-running is safe and cheap: metadata upserts never overwrite a populated
+field with NULL, and pass F skips articles whose text is already on disk.
 
 Politeness: one request at a time, 1.0s delay, exponential backoff on 429.
 Run it from your own machine; scripted access to these hosts is blocked from
@@ -47,7 +66,6 @@ Claude's cloud sandbox by egress policy.
 from __future__ import annotations
 
 import argparse
-import csv
 import html
 import json
 import re
@@ -61,6 +79,9 @@ try:
     import requests
 except ImportError:  # pragma: no cover
     sys.exit("pip install requests")
+
+import osi_export
+import osi_text
 
 # --------------------------------------------------------------------------- #
 # config
@@ -152,7 +173,13 @@ CREATE TABLE IF NOT EXISTS items (
     tags          TEXT,                 -- '; ' joined
     wordcount     INTEGER,
     issue_label   TEXT,                 -- e.g. 'Fall 2026' when resolvable
-    retrieved_at  TEXT
+    retrieved_at  TEXT,
+    text_path     TEXT,                 -- pass F: path to the written .txt
+    text_status   TEXT,                 -- ok | paywalled-preview | unavailable
+    text_strategy TEXT,                 -- which body source worked
+    text_sha256   TEXT,
+    text_words    INTEGER,
+    text_chars    INTEGER
 );
 CREATE TABLE IF NOT EXISTS raw (
     key   TEXT PRIMARY KEY,
@@ -498,156 +525,190 @@ def link_issues(conn: sqlite3.Connection) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# exports
+
+# --------------------------------------------------------------------------- #
+# the simple paths: run everything, or be asked
 # --------------------------------------------------------------------------- #
 
-COLUMNS = ["key", "source", "source_id", "url", "slug", "title", "subtitle", "authors",
-           "published", "year", "item_type", "access", "section", "tags", "wordcount",
-           "issue_label", "retrieved_at"]
+FULL_RUN_BLURB = """\
+This will, in one pass:
+  1. enumerate every TOS article from the year sitemaps, 2006 to now
+  2. pull full metadata for all of them from the archive API
+  3. pull objectivestandard.org's own posts, podcasts, conferences, courses
+  4. group articles into their quarterly issues
+  5. download each article body and write one .txt per article
+  6. export CSV, Zotero CSL-JSON, BibTeX, and Cloudflare D1 SQL
+
+Roughly 2,700 articles. Expect 60-90 minutes at the default 1s delay, and
+about 100-200 MB on disk including the text corpus.
+"""
 
 
-def rows(conn: sqlite3.Connection) -> List[sqlite3.Row]:
-    conn.row_factory = sqlite3.Row
-    return conn.execute(
-        f"SELECT {','.join(COLUMNS)} FROM items "
-        "ORDER BY (published IS NULL), published DESC, title"
-    ).fetchall()
+def run_everything(conn: sqlite3.Connection, *, text_dir: str = osi_text.TEXT_DIR,
+                   legacy: bool = False, d1_text: bool = False,
+                   text_limit: Optional[int] = None) -> None:
+    """Every pass, then every export. This is what a bare invocation does."""
+    print("[A] Substack year sitemaps")
+    harvest_substack_sitemap(conn)
+    print("[B] Substack archive API")
+    harvest_substack_api(conn)
+    print("[C] objectivestandard.org WordPress REST")
+    harvest_wp(conn)
+    if legacy:
+        print("[D] legacy archive.theobjectivestandard.com")
+        harvest_legacy(conn)
+    print("[E] mapping articles to quarterly issues")
+    link_issues(conn)
+    print("[F] full text")
+    osi_text.harvest_text(conn, get, substack_base=SUBSTACK, text_dir=text_dir,
+                          limit=text_limit)
+    osi_text.write_manifest(conn)
+    print("\n[export]")
+    export_all(conn, d1_text=d1_text, text_dir=text_dir)
 
 
-def export_csv(conn: sqlite3.Connection, path="osi_citations.csv") -> None:
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=COLUMNS)
-        w.writeheader()
-        for r in rows(conn):
-            w.writerow({k: r[k] for k in COLUMNS})
-    print(f"  wrote {path}")
+def export_all(conn: sqlite3.Connection, *, d1_text: bool = False,
+               text_dir: str = osi_text.TEXT_DIR) -> None:
+    osi_export.export_csv(conn)
+    osi_export.export_csl(conn)
+    osi_export.export_bibtex(conn)
+    osi_export.export_d1(conn, include_text=d1_text, text_dir=text_dir)
 
 
-def _csl_authors(s: Optional[str]) -> List[dict]:
-    out = []
-    for name in (s or "").split(";"):
-        name = name.strip()
-        if not name:
-            continue
-        parts = name.split()
-        if len(parts) == 1:
-            out.append({"literal": name})
-        else:
-            out.append({"given": " ".join(parts[:-1]), "family": parts[-1]})
-    return out
+def _ask(prompt: str, default: str = "y") -> bool:
+    suffix = "[Y/n]" if default == "y" else "[y/N]"
+    try:
+        got = input(f"{prompt} {suffix} ").strip().lower()
+    except EOFError:
+        return default == "y"
+    if not got:
+        return default == "y"
+    return got.startswith("y")
 
 
-def export_csl(conn: sqlite3.Connection, path="osi_citations.json") -> None:
-    items = []
-    for r in rows(conn):
-        date_parts: List[List[int]] = []
-        if r["published"]:
-            bits = re.match(r"(\d{4})-(\d{2})-(\d{2})", r["published"])
-            if bits:
-                date_parts = [[int(x) for x in bits.groups()]]
-            elif r["year"]:
-                date_parts = [[r["year"]]]
-        elif r["year"]:
-            date_parts = [[r["year"]]]
-        items.append({
-            "id": r["key"],
-            "type": "article-magazine" if r["source"] != "wp" else "post-weblog",
-            "title": r["title"],
-            "author": _csl_authors(r["authors"]),
-            "container-title": "The Objective Standard" if r["source"] in ("substack", "legacy")
-                               else "Objective Standard Institute",
-            "issue": r["issue_label"] or None,
-            "URL": r["url"],
-            "issued": {"date-parts": date_parts} if date_parts else None,
-            "accessed": {"raw": (r["retrieved_at"] or "")[:10]},
-            "note": f"access={r['access'] or 'unknown'}"
-                    + (f"; tags={r['tags']}" if r["tags"] else ""),
-        })
-    items = [{k: v for k, v in it.items() if v} for it in items]
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(items, fh, ensure_ascii=False, indent=1)
-    print(f"  wrote {path}")
+def wizard(args) -> int:
+    """Asked when run with no arguments on a terminal. Every answer has a
+    default, so holding Enter runs the whole thing."""
+    print("OSI / TOS citation harvester\n")
+    print(FULL_RUN_BLURB)
+    if _ask("Run all of that now?"):
+        conn = connect(args.db)
+        osi_text.migrate(conn)
+        run_everything(conn, legacy=False, d1_text=False)
+        osi_export.summarize(conn)
+        conn.close()
+        return 0
 
+    print("\nFine - piece by piece. Enter accepts the default in brackets.\n")
+    meta = _ask("Fetch article metadata (passes A-E)?")
+    text = _ask("Download article bodies to .txt files (pass F)?")
+    if text:
+        try:
+            raw = input("  Limit to how many articles? [all] ").strip()
+            args.text_limit = int(raw) if raw else None
+        except (EOFError, ValueError):
+            args.text_limit = None
+    legacy = _ask("Also crawl the legacy site? Its TLS cert does not match its "
+                  "hostname, so verification would be disabled", "n")
+    d1_text = _ask("Embed article bodies in the D1 SQL? Large; the .txt files "
+                   "already hold them", "n")
 
-def _bibkey(r: sqlite3.Row, used: set) -> str:
-    first = (r["authors"] or "").split(";")[0].strip()
-    last = first.split()[-1] if first.split() else "anon"
-    base = re.sub(r"[^A-Za-z0-9]", "", last) or "anon"
-    base = f"{base}{r['year'] or 'nd'}"
-    key, i = base, 1
-    while key in used:
-        i += 1
-        key = f"{base}{chr(96 + i)}"
-    used.add(key)
-    return key
-
-
-def export_bibtex(conn: sqlite3.Connection, path="osi_citations.bib") -> None:
-    used: set = set()
-    with open(path, "w", encoding="utf-8") as fh:
-        for r in rows(conn):
-            k = _bibkey(r, used)
-            title = (r["title"] or "").replace("{", "").replace("}", "")
-            auth = " and ".join(a.strip() for a in (r["authors"] or "").split(";") if a.strip())
-            journal = ("The Objective Standard" if r["source"] in ("substack", "legacy")
-                       else "Objective Standard Institute")
-            fh.write(f"@article{{{k},\n")
-            fh.write(f"  title   = {{{{{title}}}}},\n")
-            if auth:
-                fh.write(f"  author  = {{{auth}}},\n")
-            fh.write(f"  journal = {{{journal}}},\n")
-            if r["year"]:
-                fh.write(f"  year    = {{{r['year']}}},\n")
-            if r["published"]:
-                fh.write(f"  date    = {{{r['published'][:10]}}},\n")
-            if r["issue_label"]:
-                fh.write(f"  issue   = {{{r['issue_label']}}},\n")
-            if r["url"]:
-                fh.write(f"  url     = {{{r['url']}}},\n")
-            fh.write(f"  urldate = {{{(r['retrieved_at'] or '')[:10]}}},\n")
-            fh.write(f"  note    = {{access: {r['access'] or 'unknown'}}}\n}}\n\n")
-    print(f"  wrote {path}")
-
-
-def summarize(conn: sqlite3.Connection) -> None:
-    conn.row_factory = sqlite3.Row
-    print("\n--- summary ---")
-    for r in conn.execute("SELECT source, COUNT(*) n FROM items GROUP BY source ORDER BY n DESC"):
-        print(f"  {str(r['source']):<10} {r['n']}")
-    for r in conn.execute("SELECT access, COUNT(*) n FROM items GROUP BY access ORDER BY n DESC"):
-        print(f"  access={str(r['access'] or 'unknown'):<12} {r['n']}")
-    r = conn.execute("SELECT MIN(published) a, MAX(published) b FROM items "
-                     "WHERE published IS NOT NULL").fetchone()
-    print(f"  date range {(r['a'] or '?')[:10]} .. {(r['b'] or '?')[:10]}")
-    r = conn.execute("SELECT COUNT(*) n FROM items WHERE authors IS NULL OR authors=''").fetchone()
-    print(f"  missing author: {r['n']}")
-    r = conn.execute("SELECT COUNT(*) n FROM items WHERE published IS NULL").fetchone()
-    print(f"  missing date (sitemap-only, not yet matched by API): {r['n']}")
-    print(f"  TOTAL {conn.execute('SELECT COUNT(*) FROM items').fetchone()[0]}")
+    conn = connect(args.db)
+    osi_text.migrate(conn)
+    if meta:
+        print("\n[A] Substack year sitemaps")
+        harvest_substack_sitemap(conn)
+        print("[B] Substack archive API")
+        harvest_substack_api(conn)
+        print("[C] objectivestandard.org WordPress REST")
+        harvest_wp(conn)
+        if legacy:
+            print("[D] legacy archive.theobjectivestandard.com")
+            harvest_legacy(conn)
+        print("[E] mapping articles to quarterly issues")
+        link_issues(conn)
+    elif legacy:
+        print("\n[D] legacy archive.theobjectivestandard.com")
+        harvest_legacy(conn)
+    if text:
+        print("[F] full text")
+        osi_text.harvest_text(conn, get, substack_base=SUBSTACK,
+                              text_dir=args.text_dir, limit=args.text_limit)
+        osi_text.write_manifest(conn)
+    print("\n[export]")
+    export_all(conn, d1_text=d1_text, text_dir=args.text_dir)
+    osi_export.summarize(conn)
+    conn.close()
+    return 0
 
 
 # --------------------------------------------------------------------------- #
 
 def main() -> None:
     global DELAY
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="With no arguments: asks once, then does everything. "
+               "The flags below are for partial and repeat runs.")
+    ap.add_argument("--all", action="store_true",
+                    help="every pass and every export, no questions asked")
     ap.add_argument("--db", default=DB)
-    ap.add_argument("--only", choices=["sitemap", "api", "substack", "wp", "legacy"],
-                    action="append", help="restrict to these sources (repeatable)")
-    ap.add_argument("--legacy-insecure", action="store_true",
-                    help="also crawl archive.theobjectivestandard.com with TLS verification off")
-    ap.add_argument("--export-only", action="store_true")
-    ap.add_argument("--delay", type=float, default=DELAY)
+    ap.add_argument("--delay", type=float, default=DELAY,
+                    help="seconds between requests (default 1.0)")
+
+    g0 = ap.add_argument_group("partial runs")
+    g0.add_argument("--only", choices=["sitemap", "api", "substack", "wp", "legacy"],
+                    action="append", help="restrict the metadata passes (repeatable)")
+    g0.add_argument("--legacy-insecure", action="store_true",
+                    help="also crawl archive.theobjectivestandard.com with TLS "
+                         "verification off (its cert does not match its hostname)")
+    g0.add_argument("--export-only", action="store_true",
+                    help="no network, just re-export from the existing database")
+    g0.add_argument("--no-export", action="store_true")
+
+    g = ap.add_argument_group("full text (pass F)")
+    g.add_argument("--fulltext", action="store_true",
+                   help="include pass F alongside the metadata passes")
+    g.add_argument("--fulltext-only", action="store_true",
+                   help="pass F alone against the existing database")
+    g.add_argument("--text-dir", default=osi_text.TEXT_DIR)
+    g.add_argument("--refetch-text", action="store_true",
+                   help="re-fetch bodies already stored (default: resume, "
+                        "retrying only items with no body yet)")
+    g.add_argument("--text-limit", type=int,
+                   help="stop after N articles - useful for a trial run")
+    g.add_argument("--text-source", choices=["substack", "wp", "legacy"],
+                   action="append", help="restrict pass F to these sources")
+
+    g2 = ap.add_argument_group("exports")
+    g2.add_argument("--d1-include-text", action="store_true",
+                    help="embed article bodies in d1_data.sql (large)")
+
     args = ap.parse_args()
     DELAY = args.delay
 
+    # No arguments at all: ask, or just run the lot when not on a terminal.
+    if len(sys.argv) == 1:
+        if sys.stdin.isatty():
+            sys.exit(wizard(args))
+        args.all = True
+
     conn = connect(args.db)
+    osi_text.migrate(conn)          # adds text columns to a pre-existing db
+
+    if args.all:
+        run_everything(conn, text_dir=args.text_dir, legacy=args.legacy_insecure,
+                       d1_text=args.d1_include_text, text_limit=args.text_limit)
+        osi_export.summarize(conn)
+        conn.close()
+        return
+
     want = set(args.only or ["substack", "wp"])
     if "substack" in want:
         want |= {"sitemap", "api"}
 
-    if not args.export_only:
+    if not (args.export_only or args.fulltext_only):
         if "sitemap" in want:
             print("[A] Substack year sitemaps")
             harvest_substack_sitemap(conn)
@@ -664,11 +725,17 @@ def main() -> None:
             print("[E] mapping articles to quarterly issues")
             link_issues(conn)
 
-    print("\n[export]")
-    export_csv(conn)
-    export_csl(conn)
-    export_bibtex(conn)
-    summarize(conn)
+    if (args.fulltext or args.fulltext_only) and not args.export_only:
+        print("[F] full text")
+        osi_text.harvest_text(conn, get, substack_base=SUBSTACK,
+                              text_dir=args.text_dir, refetch=args.refetch_text,
+                              limit=args.text_limit, sources=args.text_source)
+        osi_text.write_manifest(conn)
+
+    if not args.no_export:
+        print("\n[export]")
+        export_all(conn, d1_text=args.d1_include_text, text_dir=args.text_dir)
+    osi_export.summarize(conn)
     conn.close()
 
 
