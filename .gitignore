@@ -13,3 +13,12 @@ texts/
 text_manifest.csv
 d1_schema.sql
 d1_data.sql
+
+prometheus.sqlite
+*_bodies.sql
+osi_load.sql
+prometheus_load.sql
+prometheus_citations.csv
+prometheus_zotero.csl.json
+prometheus_citations.bib
+ref/
