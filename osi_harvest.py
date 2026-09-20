@@ -67,6 +67,8 @@ from __future__ import annotations
 
 import argparse
 import html
+import http.cookiejar
+import os
 import json
 import re
 import sqlite3
@@ -104,6 +106,60 @@ UA = "OSI-citation-harvester/1.0 (personal bibliographic research; contact: you@
 
 SESSION = requests.Session()
 SESSION.headers.update({"User-Agent": UA, "Accept": "application/json, text/html;q=0.9"})
+
+# Cookies are attached to this host only, never sent to objectivestandard.org.
+SUBSTACK_COOKIE_DOMAIN = ".theobjectivestandard.com"
+
+
+def load_cookies(cookie_file: Optional[str] = None,
+                 cookie_str: Optional[str] = None) -> str:
+    """Attach a logged-in Substack session to SESSION.
+
+    Metadata needs no authentication, but article *bodies* for posts marked
+    `only_paid` - which is most of the pre-2024 back catalogue - are withheld
+    from anonymous clients. A subscriber session is the only way pass F gets
+    those bodies rather than previews. A free account does not unlock them.
+
+    Two ways in, neither of which asks for a password:
+      --cookie-file  a Netscape cookies.txt exported from your browser
+      --cookie       a raw 'name=value; name2=value2' string
+
+    Cookies from --cookie are pinned to the Substack domain so a subscriber
+    session can never be sent to the other host.
+    """
+    cookie_file = cookie_file or os.environ.get("OSI_COOKIE_FILE")
+    cookie_str = cookie_str or os.environ.get("OSI_COOKIE")
+    notes = []
+
+    if cookie_file:
+        path = os.path.expanduser(cookie_file)
+        jar = http.cookiejar.MozillaCookieJar(path)
+        try:
+            # ignore_discard/ignore_expires so session cookies in an export survive
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except (OSError, http.cookiejar.LoadError) as exc:
+            print(f"  ! could not read {path}: {exc}", file=sys.stderr)
+        else:
+            SESSION.cookies.update(jar)
+            notes.append(f"{len(jar)} cookies from {os.path.basename(path)}")
+
+    if cookie_str:
+        n = 0
+        for chunk in cookie_str.split(";"):
+            chunk = chunk.strip()
+            if "=" not in chunk:
+                continue
+            name, _, value = chunk.partition("=")
+            SESSION.cookies.set(name.strip(), value.strip(),
+                                domain=SUBSTACK_COOKIE_DOMAIN, path="/")
+            n += 1
+        notes.append(f"{n} cookies from --cookie")
+
+    return ", ".join(notes)
+
+
+def have_substack_cookies() -> bool:
+    return any("theobjectivestandard" in (c.domain or "") for c in SESSION.cookies)
 
 
 # --------------------------------------------------------------------------- #
@@ -544,6 +600,20 @@ about 100-200 MB on disk including the text corpus.
 """
 
 
+def warn_if_anonymous() -> None:
+    """Say plainly, before the long pass, what anonymous access cannot get."""
+    if have_substack_cookies():
+        print("  subscriber cookies present - paywalled bodies should be readable")
+        return
+    print("  NOTE: no subscriber cookies. Metadata is unaffected, but article\n"
+          "  BODIES for posts marked only_paid - most of the pre-2024 back\n"
+          "  catalogue - will come back as previews and be recorded as\n"
+          "  text_status='paywalled-preview'. A free account does not unlock\n"
+          "  them. To get them later: export cookies.txt from a logged-in\n"
+          "  subscriber browser session and re-run:\n"
+          "    python osi_harvest.py --fulltext-only --cookie-file cookies.txt")
+
+
 def run_everything(conn: sqlite3.Connection, *, text_dir: str = osi_text.TEXT_DIR,
                    legacy: bool = False, d1_text: bool = False,
                    text_limit: Optional[int] = None) -> None:
@@ -560,8 +630,10 @@ def run_everything(conn: sqlite3.Connection, *, text_dir: str = osi_text.TEXT_DI
     print("[E] mapping articles to quarterly issues")
     link_issues(conn)
     print("[F] full text")
+    warn_if_anonymous()
     osi_text.harvest_text(conn, get, substack_base=SUBSTACK, text_dir=text_dir,
-                          limit=text_limit)
+                          limit=text_limit,
+                          retry_previews=have_substack_cookies())
     osi_text.write_manifest(conn)
     print("\n[export]")
     export_all(conn, d1_text=d1_text, text_dir=text_dir)
@@ -591,6 +663,10 @@ def wizard(args) -> int:
     default, so holding Enter runs the whole thing."""
     print("OSI / TOS citation harvester\n")
     print(FULL_RUN_BLURB)
+    if not have_substack_cookies():
+        print("Article bodies for paywalled posts need a subscriber session; without\n"
+              "one those articles yield previews. Pass --cookie-file to fix that,\n"
+              "now or on a later --fulltext-only run.\n")
     if _ask("Run all of that now?"):
         conn = connect(args.db)
         osi_text.migrate(conn)
@@ -602,6 +678,15 @@ def wizard(args) -> int:
     print("\nFine - piece by piece. Enter accepts the default in brackets.\n")
     meta = _ask("Fetch article metadata (passes A-E)?")
     text = _ask("Download article bodies to .txt files (pass F)?")
+    if text and not have_substack_cookies():
+        print("  Bodies of paywalled posts (most of the back catalogue) need a")
+        print("  subscriber session. Leave blank to skip and get previews.")
+        try:
+            cf = input("  Path to a cookies.txt from a logged-in browser? [none] ").strip()
+        except EOFError:
+            cf = ""
+        if cf:
+            print("  " + (load_cookies(cookie_file=cf) or "no cookies loaded"))
     if text:
         try:
             raw = input("  Limit to how many articles? [all] ").strip()
@@ -632,8 +717,10 @@ def wizard(args) -> int:
         harvest_legacy(conn)
     if text:
         print("[F] full text")
+        warn_if_anonymous()
         osi_text.harvest_text(conn, get, substack_base=SUBSTACK,
-                              text_dir=args.text_dir, limit=args.text_limit)
+                              text_dir=args.text_dir, limit=args.text_limit,
+                              retry_previews=have_substack_cookies())
         osi_text.write_manifest(conn)
     print("\n[export]")
     export_all(conn, d1_text=d1_text, text_dir=args.text_dir)
@@ -668,6 +755,16 @@ def main() -> None:
     g0.add_argument("--no-export", action="store_true")
 
     g = ap.add_argument_group("full text (pass F)")
+    g.add_argument("--cookie-file", metavar="PATH",
+                   help="Netscape cookies.txt from a logged-in Substack "
+                        "subscriber browser session - needed for the bodies of "
+                        "paywalled posts. Env: OSI_COOKIE_FILE")
+    g.add_argument("--cookie", metavar="STR",
+                   help="raw 'name=value; ...' cookie header instead of a file. "
+                        "Env: OSI_COOKIE")
+    g.add_argument("--retry-previews", action="store_true",
+                   help="also re-fetch bodies stored as paywalled-preview "
+                        "(implied when cookies are supplied)")
     g.add_argument("--fulltext", action="store_true",
                    help="include pass F alongside the metadata passes")
     g.add_argument("--fulltext-only", action="store_true",
@@ -687,6 +784,10 @@ def main() -> None:
 
     args = ap.parse_args()
     DELAY = args.delay
+
+    loaded = load_cookies(args.cookie_file, args.cookie)
+    if loaded:
+        print(f"[auth] {loaded}")
 
     # No arguments at all: ask, or just run the lot when not on a terminal.
     if len(sys.argv) == 1:
@@ -727,9 +828,12 @@ def main() -> None:
 
     if (args.fulltext or args.fulltext_only) and not args.export_only:
         print("[F] full text")
+        warn_if_anonymous()
         osi_text.harvest_text(conn, get, substack_base=SUBSTACK,
                               text_dir=args.text_dir, refetch=args.refetch_text,
-                              limit=args.text_limit, sources=args.text_source)
+                              limit=args.text_limit, sources=args.text_source,
+                              retry_previews=(args.retry_previews
+                                              or have_substack_cookies()))
         osi_text.write_manifest(conn)
 
     if not args.no_export:

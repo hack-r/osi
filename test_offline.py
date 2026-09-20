@@ -327,6 +327,51 @@ conn.close()
 
 
 # --------------------------------------------------------------------------- #
+print("\n[auth: cookie scoping]")
+check("no cookies by default", H.have_substack_cookies() is False)
+note = H.load_cookies(cookie_str="substack.sid=abc123; other=x")
+check("cookie header parsed", "2 cookies" in note, note)
+check("cookies detected", H.have_substack_cookies() is True)
+_jar = {c.name: c.domain for c in H.SESSION.cookies}
+check("cookies pinned to the substack domain",
+      all("theobjectivestandard" in d for d in _jar.values()), _jar)
+check("subscriber cookie never sent to objectivestandard.org",
+      H.SESSION.cookies.get_dict(domain="objectivestandard.org") == {},
+      H.SESSION.cookies.get_dict(domain="objectivestandard.org"))
+check("cookie value reaches the substack host",
+      H.SESSION.cookies.get_dict(domain=".theobjectivestandard.com").get("substack.sid")
+      == "abc123")
+check("missing cookie file is survivable",
+      H.load_cookies(cookie_file="/nonexistent/cookies.txt") == "")
+H.SESSION.cookies.clear()
+check("cleared", H.have_substack_cookies() is False)
+
+# previews are retried only when asked
+_calls = []
+conn2 = H.connect("prev.sqlite")
+H.save(conn2, {"key": "substack:p", "source": "substack", "source_id": "1",
+               "url": "https://www.theobjectivestandard.com/p/p", "slug": "p",
+               "title": "Paywalled", "authors": "A B", "published": "2010-01-01",
+               "year": 2010, "wordcount": 3000})
+conn2.commit()
+T.migrate(conn2)
+conn2.execute("UPDATE items SET text_status='paywalled-preview', "
+              "text_path='texts/x.txt' WHERE key='substack:p'")
+conn2.commit()
+
+
+def _stub(url, *, params=None, verify=True, expect_json=False):
+    _calls.append(url)
+    return None
+
+
+T.harvest_text(conn2, _stub, substack_base=H.SUBSTACK, text_dir="texts2")
+check("previews left alone by default", len(_calls) == 0, _calls)
+T.harvest_text(conn2, _stub, substack_base=H.SUBSTACK, text_dir="texts2",
+               retry_previews=True)
+check("previews retried when asked", len(_calls) > 0, _calls)
+conn2.close()
+
 print("\n[cli: wizard defaults]")
 import builtins
 _input = builtins.input

@@ -75,6 +75,14 @@ for every post, a body under 40% of the expected length is recorded as
 `paywalled-preview`, not silently stored as though complete. Under 40 words is
 `unavailable` and no file is written.
 
+**This is where the back catalogue is genuinely incomplete.** Citation metadata
+for 2006–present is fully covered by passes A and B. Bodies are not: the
+`only_paid` marking on most pre-2024 posts withholds them from anonymous
+clients, and a free account does not lift it. A paid subscriber session
+(`--cookie-file cookies.txt`, pinned to the Substack domain) is the only route
+to those bodies. Supplying cookies implies `--retry-previews`, so a second run
+re-fetches exactly the articles that came back short.
+
 ## Tooling
 
 - `osi_harvest.py` — entry point. Passes A/B/C/E, optional D behind
@@ -84,8 +92,9 @@ for every post, a body under 40% of the expected length is recorded as
 - `osi_text.py` — HTML→text (stdlib `HTMLParser`, no bs4), filename
   construction, the `.txt` files, pass F.
 - `osi_export.py` — CSV, Zotero CSL-JSON, BibTeX, Cloudflare D1 SQL.
-- `test_offline.py` — 108 offline checks, including executing the generated D1
-  SQL against a fresh SQLite database to prove it loads and round-trips.
+- `test_offline.py` — 106 offline checks, including cookie scoping and
+  executing the generated D1 SQL against a fresh SQLite database to prove it
+  loads and round-trips.
 
 ## Open questions
 

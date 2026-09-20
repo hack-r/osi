@@ -364,9 +364,14 @@ def migrate(conn: sqlite3.Connection) -> None:
 def harvest_text(conn: sqlite3.Connection, getter, *, substack_base: str,
                  text_dir: str = TEXT_DIR, refetch: bool = False,
                  limit: Optional[int] = None,
-                 sources: Optional[List[str]] = None) -> Dict[str, int]:
+                 sources: Optional[List[str]] = None,
+                 retry_previews: bool = False) -> Dict[str, int]:
     """Write one .txt per item. Resumable: items that already have a readable
-    file on disk are skipped unless `refetch`."""
+    file on disk are skipped unless `refetch`.
+
+    `retry_previews` also re-fetches items previously stored as
+    `paywalled-preview`. That is what you want on the first run after adding a
+    subscriber cookie, and pointless without one."""
     migrate(conn)
     os.makedirs(text_dir, exist_ok=True)
     conn.row_factory = sqlite3.Row
@@ -376,9 +381,13 @@ def harvest_text(conn: sqlite3.Connection, getter, *, substack_base: str,
         where += f" AND source IN ({','.join('?' * len(sources))})"
         params += sources
     if not refetch:
-        # Retry anything that has no file yet, and anything previously
-        # unavailable; leave good bodies and known previews alone.
-        where += " AND (text_status IS NULL OR text_status='unavailable')"
+        # Retry anything with no file yet and anything previously unavailable;
+        # leave good bodies alone. Previews join the retry list only when a
+        # subscriber session makes a better result possible.
+        retryable = ["text_status IS NULL", "text_status='unavailable'"]
+        if retry_previews:
+            retryable.append("text_status='paywalled-preview'")
+        where += " AND (" + " OR ".join(retryable) + ")"
     sql = (f"SELECT * FROM items WHERE {where} "
            "ORDER BY (published IS NULL), published DESC")
     if limit:
@@ -386,7 +395,8 @@ def harvest_text(conn: sqlite3.Connection, getter, *, substack_base: str,
 
     rows = conn.execute(sql, params).fetchall()
     stats = {"ok": 0, "paywalled-preview": 0, "unavailable": 0, "skipped": 0}
-    print(f"  {len(rows)} item(s) to fetch text for")
+    print(f"  {len(rows)} item(s) to fetch text for"
+          + ("  (including previously paywalled previews)" if retry_previews else ""))
 
     for i, r in enumerate(rows, 1):
         row = dict(r)

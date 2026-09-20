@@ -7,9 +7,14 @@ Objective Standard*** (`theobjectivestandard.com`), 2006 to present.
 The key finding from reconnaissance: the Substack migration brought the whole
 2006–present back catalogue with it, and the paywall withholds only article
 *bodies* — every citation field (title, byline, date, canonical URL, word count,
-section, tags) comes back in public JSON. So no authentication is needed. See
-[docs/SOURCES.md](docs/SOURCES.md) for the endpoint inventory, verified counts,
-and the blockers.
+section, tags) comes back in public JSON. See [docs/SOURCES.md](docs/SOURCES.md)
+for the endpoint inventory, verified counts, and the blockers.
+
+**Coverage, in one line each.** *Citations:* complete, 2006 to present, no
+authentication needed. *Full text:* complete only from ~2024 on — earlier
+articles are `only_paid` and yield previews unless you supply a subscriber
+session, and a free account does not unlock them. See
+[Paywalled bodies](#paywalled-bodies).
 
 ## Run it
 
@@ -24,7 +29,9 @@ instead, with a sensible default on every question — holding Enter is fine.
 
 `python osi_harvest.py --all` does the same with no questions, for cron or CI.
 
-Must be run from your own machine: the agent sandbox's egress allowlist blocks
+Runs anywhere with real outbound internet: your own machine, or GitHub Actions
+(see [docs/RUNNING.md](docs/RUNNING.md) — local is recommended for the first
+run). It cannot run in Claude's cloud sandbox, whose egress allowlist blocks
 both target hosts.
 
 Expect ~2,700 articles, 60–90 minutes at the default 1s delay, and 100–200 MB on
@@ -46,6 +53,8 @@ articles whose text is already on disk, so an interrupted run resumes.
 | `--legacy-insecure` | also crawl `archive.theobjectivestandard.com` with TLS verification **off** (its cert doesn't match its hostname) |
 | `--delay 2.0` | slow down (Substack 429s on bursts) |
 | `--refetch-text` | re-fetch bodies already stored |
+| `--cookie-file cookies.txt` | supply a subscriber session for paywalled bodies |
+| `--retry-previews` | re-fetch only the articles stored as previews |
 
 </details>
 
@@ -60,6 +69,32 @@ articles whose text is already on disk, so an interrupted run resumes.
 | `osi_citations.csv` | flat export |
 | `osi_citations.sqlite` | normalized `items` + the raw JSON per item |
 | `d1_schema.sql` / `d1_data.sql` | Cloudflare D1 |
+
+## Paywalled bodies
+
+Metadata needs no login. Article **bodies** for posts marked `only_paid` — most
+of the pre-2024 back catalogue — are withheld from anonymous clients, and a free
+account does not change that. Those articles are recorded as
+`text_status='paywalled-preview'` and their `.txt` holds the preview, clearly
+labelled, rather than being passed off as the whole article.
+
+If you have a paid subscription, export `cookies.txt` from a logged-in browser
+session and pass it. No password is ever typed into the script:
+
+```bash
+python osi_harvest.py --fulltext-only --cookie-file cookies.txt
+```
+
+Supplying cookies implies `--retry-previews`, so exactly the articles that came
+back short last time are re-fetched and nothing else. `--cookie "name=value; …"`
+works too, as do `OSI_COOKIE_FILE` and `OSI_COOKIE`. Cookies are pinned to the
+Substack domain, so a subscriber session is never sent to
+`objectivestandard.org`.
+
+Without a subscription the corpus is still useful — every title, byline, date,
+issue, section and tag is there, plus full bodies from ~2024 on — but a text
+mining run over the whole catalogue should filter on `text_status='ok'` and
+treat the rest as bibliographic records only.
 
 ## The text corpus
 
@@ -179,7 +214,7 @@ all of them failing.
 | `osi_harvest.py` | entry point: config, HTTP, storage, passes A–E, CLI |
 | `osi_text.py` | HTML→text, filenames, the `.txt` files, pass F |
 | `osi_export.py` | CSV, Zotero CSL-JSON, BibTeX, D1 SQL, summary |
-| `test_offline.py` | 108 offline checks |
+| `test_offline.py` | 106 offline checks |
 
 Only dependency is `requests`. HTML is reduced to text by a small `HTMLParser`
 subclass rather than bs4/lxml, so there's nothing else to install.
@@ -190,11 +225,11 @@ subclass rather than bs4/lxml, so there's nothing else to install.
 python test_offline.py
 ```
 
-108 checks over parsing, upsert precedence, issue linking, HTML→text, filename
+106 checks over parsing, upsert precedence, issue linking, HTML→text, filename
 construction, the paywall heuristic, pass F resumability, database migration, and
 all four exports — including the real edge cases found in the data (empty
 excerpt, corrupt `0002-08-12` date, subtitle-only byline, single-name author,
-BibTeX key collision, apostrophes in titles). The D1 export is verified by
+BibTeX key collision, apostrophes in titles), plus cookie scoping. The D1 export is verified by
 executing the generated SQL against a fresh SQLite database and checking the
 rows come back: D1 *is* SQLite, so SQL that SQLite accepts and that round-trips
 correctly is SQL D1 will accept. No network.
