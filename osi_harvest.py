@@ -326,14 +326,43 @@ def authors_from(bylines: Optional[list], subtitle: Optional[str]) -> str:
     return "; ".join(dict.fromkeys(names))
 
 
+# A date whose year falls outside this window is a parse or data-entry
+# artifact, not a publication date. The window is deliberately wide: the job
+# here is to reject impossible values, not to second-guess plausible ones.
+MIN_YEAR, MAX_YEAR = 1990, 2100
+
+# Dates rejected during this run, for the summary. (url, raw value)
+DATE_ANOMALIES: List[tuple] = []
+
+
 def year_of(iso: Optional[str]) -> Optional[int]:
+    """The year of an ISO-ish date string, or None if it is not plausible."""
     if not iso:
         return None
     m = re.match(r"(\d{4})", iso)
     if not m:
         return None
     y = int(m.group(1))
-    return y if 1990 <= y <= 2100 else None
+    return y if MIN_YEAR <= y <= MAX_YEAR else None
+
+
+def clean_date(iso: Optional[str], url: Optional[str] = None) -> Optional[str]:
+    """Return the date only if it is plausible, else None.
+
+    Both halves of a date have to be validated together. Validating only the
+    year - which is what this used to do - left the raw string in `published`
+    while `year` silently became NULL, so a corrupt value like '0002-08-12'
+    survived into the CSV, the .txt headers, the BibTeX `date` field, CSL-JSON's
+    `issued.date-parts` (as year 2, which Zotero will not accept), and the
+    summary's reported date range. The raw value is still in the `raw` table if
+    it is ever needed; it just no longer masquerades as a date.
+    """
+    if not iso:
+        return None
+    if year_of(iso) is None:
+        DATE_ANOMALIES.append((url or "?", iso))
+        return None
+    return iso
 
 
 def issue_label(*texts: Optional[str]) -> Optional[str]:
@@ -408,7 +437,8 @@ def harvest_substack_api(conn: sqlite3.Connection, limit: int = 50) -> int:
         for p in data:
             slug = p.get("slug") or str(p.get("id"))
             subtitle = p.get("subtitle")
-            pub = p.get("post_date")
+            pub = clean_date(p.get("post_date"),
+                             p.get("canonical_url") or p.get("slug"))
             tags = "; ".join(filter(None, (t.get("name") for t in (p.get("postTags") or []))))
             rec = {
                 "key": f"substack:{slug}",
@@ -468,7 +498,8 @@ def harvest_wp(conn: sqlite3.Connection) -> int:
                 break
             for p in data:
                 pid = p.get("id")
-                pub = p.get("date_gmt") or p.get("date")
+                pub = clean_date(p.get("date_gmt") or p.get("date"),
+                                 p.get("link"))
                 title = strip_tags((p.get("title") or {}).get("rendered"))
                 rec = {
                     "key": f"wp:{ptype}:{pid}",
@@ -778,12 +809,24 @@ def main() -> None:
     g.add_argument("--text-source", choices=["substack", "wp", "legacy"],
                    action="append", help="restrict pass F to these sources")
 
-    g2 = ap.add_argument_group("exports")
-    g2.add_argument("--d1-include-text", action="store_true",
+    g2 = ap.add_argument_group("diagnostics")
+    g2.add_argument("--audit-dates", action="store_true",
+                    help="report every implausible stored date and exit - needs "
+                         "no network, run it against an existing database")
+
+    g3 = ap.add_argument_group("exports")
+    g3.add_argument("--d1-include-text", action="store_true",
                     help="embed article bodies in d1_data.sql (large)")
 
     args = ap.parse_args()
     DELAY = args.delay
+
+    if args.audit_dates:
+        conn = connect(args.db)
+        osi_text.migrate(conn)
+        bad = osi_export.audit_dates(conn)
+        conn.close()
+        sys.exit(1 if bad else 0)
 
     loaded = load_cookies(args.cookie_file, args.cookie)
     if loaded:

@@ -41,6 +41,22 @@ check("clip tolerates empty excerpt",
       H.clip(H.strip_tags(({"rendered": ""}).get("rendered")), 400) is None)
 check("clip truncates", H.clip(H.strip_tags("<p>hi &amp; bye</p>"), 4) == "hi &")
 check("corrupt year dropped", H.year_of("0002-08-12") is None)
+# the bug: year was validated, the date string was not, so the corrupt value
+# survived into every downstream export while year silently went NULL
+H.DATE_ANOMALIES.clear()
+check("corrupt date rejected, not stored verbatim",
+      H.clean_date("0002-08-12T00:00:00Z", "u") is None)
+check("rejection is recorded, not silent", len(H.DATE_ANOMALIES) == 1,
+      H.DATE_ANOMALIES)
+check("plausible date passes through unchanged",
+      H.clean_date("2006-05-20T00:00:00Z") == "2006-05-20T00:00:00Z")
+check("null date stays null", H.clean_date(None) is None)
+check("year 1989 rejected", H.clean_date("1989-01-01") is None)
+check("year 1990 accepted", H.clean_date("1990-01-01") == "1990-01-01")
+check("year 2100 accepted", H.clean_date("2100-01-01") == "2100-01-01")
+check("year 2101 rejected", H.clean_date("2101-01-01") is None)
+check("non-date string rejected", H.clean_date("not a date") is None)
+H.DATE_ANOMALIES.clear()
 check("valid year kept", H.year_of("2006-05-20T00:00:00Z") == 2006)
 check("null date", H.year_of(None) is None)
 check("structured byline wins",
@@ -327,6 +343,23 @@ conn.close()
 
 
 # --------------------------------------------------------------------------- #
+print("\n[date audit]")
+_a = H.connect("audit.sqlite")
+for k, pub, yr in (("substack:good", "2011-03-04T00:00:00Z", 2011),
+                   ("substack:ad2", "0002-08-12T00:00:00Z", None),
+                   ("substack:future", "2099-01-01T00:00:00Z", 2099),
+                   ("substack:mismatch", "2010-01-01T00:00:00Z", 2014),
+                   ("substack:yearonly", None, 2008)):
+    _a.execute("INSERT INTO items (key,source,published,year) VALUES (?,?,?,?)",
+               (k, "substack", pub, yr))
+_a.commit()
+_n = osi_export.audit_dates(_a)
+check("audit finds 3 distinct bad rows, not 5 category hits",
+      _n == 3, _n)
+check("audit leaves clean rows alone",
+      osi_export.audit_dates(H.connect("clean.sqlite")) == 0)
+_a.close()
+
 print("\n[auth: cookie scoping]")
 check("no cookies by default", H.have_substack_cookies() is False)
 note = H.load_cookies(cookie_str="substack.sid=abc123; other=x")

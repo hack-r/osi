@@ -40,6 +40,7 @@ import json
 import os
 import re
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 COLUMNS = ["key", "source", "source_id", "url", "slug", "title", "subtitle", "authors",
@@ -364,6 +365,67 @@ def _read_body(path: str) -> str:
 # summary
 # --------------------------------------------------------------------------- #
 
+SUSPECT_MIN_YEAR = 2006     # TOS's first issue; nothing predates it
+
+
+def audit_dates(conn: sqlite3.Connection, min_year: int = SUSPECT_MIN_YEAR,
+                max_year: Optional[int] = None) -> int:
+    """Report every stored date that cannot be a publication date.
+
+    Answers the question a single visible outlier raises: is it one row or
+    many? Run against an existing database, it needs no network.
+    """
+    from datetime import datetime, timezone
+    max_year = max_year or datetime.now(timezone.utc).year + 1
+    conn.row_factory = sqlite3.Row
+    print(f"\n--- date audit (plausible range {min_year}-{max_year}) ---")
+
+    bad_str = conn.execute(
+        "SELECT key, source, url, published, year FROM items "
+        "WHERE published IS NOT NULL AND ("
+        "  CAST(substr(published,1,4) AS INTEGER) < ? OR"
+        "  CAST(substr(published,1,4) AS INTEGER) > ? OR"
+        "  substr(published,1,4) NOT GLOB '[0-9][0-9][0-9][0-9]')",
+        (min_year, max_year)).fetchall()
+    bad_year = conn.execute(
+        "SELECT key, source, url, published, year FROM items "
+        "WHERE year IS NOT NULL AND (year < ? OR year > ?)",
+        (min_year, max_year)).fetchall()
+    mismatch = conn.execute(
+        "SELECT key, url, published, year FROM items "
+        "WHERE published IS NOT NULL AND year IS NOT NULL "
+        "  AND CAST(substr(published,1,4) AS INTEGER) <> year").fetchall()
+    orphan = conn.execute(
+        "SELECT COUNT(*) n FROM items WHERE published IS NOT NULL AND year IS NULL"
+    ).fetchone()["n"]
+
+    for label, rowset in (("implausible published", bad_str),
+                          ("implausible year", bad_year),
+                          ("year disagrees with published", mismatch)):
+        print(f"  {label}: {len(rowset)}")
+        for r in rowset[:20]:
+            print(f"      {r['published']!r:28} year={r['year']!s:6} {r['key']}")
+        if len(rowset) > 20:
+            print(f"      ... and {len(rowset) - 20} more")
+    print(f"  published set but year NULL (the old asymmetry): {orphan}")
+
+    # Distinct rows, not the sum of category counts: one row can fail several
+    # checks (an implausible `published` usually implies an implausible `year`),
+    # and reporting it twice overstates the damage.
+    affected = {r["key"] for r in bad_str} | {r["key"] for r in bad_year} \
+        | {r["key"] for r in mismatch}
+    orphan_keys = {r[0] for r in conn.execute(
+        "SELECT key FROM items WHERE published IS NOT NULL AND year IS NULL")}
+    total = len(affected | orphan_keys)
+    if total == 0:
+        print("  clean - no date anomalies")
+    else:
+        print(f"  {total} distinct row(s) need attention. Re-run the affected pass\n"
+              "  with the current code, or clear them in place:\n"
+              "    UPDATE items SET published=NULL, year=NULL WHERE <key IN ...>;")
+    return total
+
+
 def summarize(conn: sqlite3.Connection) -> None:
     conn.row_factory = sqlite3.Row
     have = {r[1] for r in conn.execute("PRAGMA table_info(items)")}
@@ -382,6 +444,13 @@ def summarize(conn: sqlite3.Connection) -> None:
     r = conn.execute("SELECT MIN(published) a, MAX(published) b FROM items "
                      "WHERE published IS NOT NULL").fetchone()
     print(f"  date range {(r['a'] or '?')[:10]} .. {(r['b'] or '?')[:10]}")
+    bad = conn.execute(
+        "SELECT COUNT(*) n FROM items WHERE published IS NOT NULL AND ("
+        "  CAST(substr(published,1,4) AS INTEGER) < ? OR"
+        "  CAST(substr(published,1,4) AS INTEGER) > ?)",
+        (SUSPECT_MIN_YEAR, datetime.now(timezone.utc).year + 1)).fetchone()["n"]
+    if bad:
+        print(f"  !! {bad} implausible date(s) stored - run --audit-dates")
     r = conn.execute("SELECT COUNT(*) n FROM items WHERE authors IS NULL OR authors=''").fetchone()
     print(f"  missing author: {r['n']}")
     r = conn.execute("SELECT COUNT(*) n FROM items WHERE published IS NULL").fetchone()
