@@ -428,6 +428,61 @@ for f in ("osi_citations.csv", "osi_zotero.csl.json", "osi_citations.bib",
           "d1_schema.sql", "d1_data.sql"):
     check(f"bare run wrote {f}", os.path.exists(f))
 
+# --------------------------------------------------------------------------- #
+print("\n[implausible upstream dates]")
+# Substack serves post_date "0002-09-01T15:34:15.000Z" for three real TOS posts.
+# Its own data, not a parse artifact -- so the only safe handling is to drop the
+# date entirely. year_of already guarded this at harvest time, but `published`
+# kept the bad string and every consumer that re-parsed it reintroduced year 2.
+BAD = "0002-09-01T15:34:15.000Z"
+
+check("year_of rejects year 2", H.year_of(BAD) is None)
+check("sanitize_published nulls date and year together",
+      H.sanitize_published(BAD) == (None, None), H.sanitize_published(BAD))
+check("sanitize_published passes a good date through",
+      H.sanitize_published("2024-09-01T15:34:15.000Z")
+      == ("2024-09-01T15:34:15.000Z", 2024))
+check("sanitize_published tolerates None", H.sanitize_published(None) == (None, None))
+for edge, want in (("1989-01-01T00:00:00Z", None), ("1990-01-01T00:00:00Z", 1990),
+                   ("2100-01-01T00:00:00Z", 2100), ("2101-01-01T00:00:00Z", None)):
+    check(f"year_of boundary {edge[:4]}", H.year_of(edge) == want, H.year_of(edge))
+
+# the export path must not re-materialise it even from an already-dirty database
+check("_date_parts drops an implausible published",
+      osi_export._date_parts(BAD, None) == [], osi_export._date_parts(BAD, None))
+check("_date_parts still handles a good published",
+      osi_export._date_parts("2006-05-20T00:00:00Z", 2006) == [[2006, 5, 20]])
+check("_date_parts falls back to a plausible year column",
+      osi_export._date_parts(None, 2012) == [[2012]])
+
+# filenames must not sort two millennia early
+check("text_filename refuses year 2",
+      T.text_filename({"published": BAD, "year": None, "source": "substack",
+                       "source_id": "1", "title": "T", "authors": "A B"})
+      .startswith("undated_"),
+      T.text_filename({"published": BAD, "year": None, "source": "substack",
+                       "source_id": "1", "title": "T", "authors": "A B"}))
+
+# end to end: a dirty row through every exporter
+_dc = sqlite3.connect(":memory:")
+_dc.row_factory = sqlite3.Row
+_dc.executescript(H.SCHEMA)
+H.save(_dc, {"key": "substack:bad", "source": "substack", "source_id": "9",
+             "url": "https://example.com/p/bad", "slug": "bad", "title": "Bad Date",
+             "authors": "Ann Author", "published": BAD, "year": H.year_of(BAD)})
+_dc.commit()
+osi_export.export_csl(_dc, "bad.csl.json")
+_bad = json.load(open("bad.csl.json"))
+check("CSL omits issued entirely for an implausible date",
+      "issued" not in _bad[0], _bad[0].get("issued"))
+osi_export.export_bibtex(_dc, "bad.bib")
+_bib = open("bad.bib").read()
+check("BibTeX carries no 0002 date", "0002" not in _bib)
+osi_export.export_csv(_dc, "bad.csv")
+check("CSV carries no 0002 date", "0002" not in open("bad.csv").read())
+osi_export.export_d1(_dc, "bad.schema.sql", "bad.data.sql")
+check("D1 SQL carries no 0002 date", "0002" not in open("bad.data.sql").read())
+
 print()
 if FAIL:
     print(f"FAILED ({len(FAIL)}): " + ", ".join(FAIL))

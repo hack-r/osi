@@ -283,6 +283,16 @@ def save(conn: sqlite3.Connection, rec: Dict[str, Any], raw: Optional[Any] = Non
     for col in ("source_id", "url", "slug", "title", "subtitle", "authors", "published",
                 "year", "item_type", "access", "section", "tags", "wordcount", "issue_label"):
         rec.setdefault(col, None)
+    # Single choke point for date plausibility, so no ingest path -- present or
+    # future -- can store a date the exporters would have to defend against.
+    # Only touched when the record actually carries a date: the sitemap pass
+    # supplies `year` with no `published` and must keep it.
+    if rec.get("published"):
+        clean, y = sanitize_published(rec["published"])
+        rec["published"] = clean
+        # A rejected date invalidates the year derived from it. Any year from an
+        # independent source survives via the UPSERT's COALESCE.
+        rec["year"] = None if clean is None else (rec.get("year") or y)
     conn.execute(UPSERT, rec)
     if raw is not None:
         conn.execute("INSERT OR REPLACE INTO raw (key, body) VALUES (?,?)",
@@ -326,6 +336,10 @@ def authors_from(bylines: Optional[list], subtitle: Optional[str]) -> str:
     return "; ".join(dict.fromkeys(names))
 
 
+YEAR_MIN = 1990
+YEAR_MAX = 2100
+
+
 def year_of(iso: Optional[str]) -> Optional[int]:
     if not iso:
         return None
@@ -333,7 +347,24 @@ def year_of(iso: Optional[str]) -> Optional[int]:
     if not m:
         return None
     y = int(m.group(1))
-    return y if 1990 <= y <= 2100 else None
+    return y if YEAR_MIN <= y <= YEAR_MAX else None
+
+
+def sanitize_published(iso):
+    """Return (published, year), both None when the upstream date is implausible.
+
+    Substack serves `post_date: "0002-09-01T15:34:15.000Z"` for three TOS posts.
+    That is Substack's own stored value, not a parse artifact: the rendered page
+    shows "Sep 01, 0002" and /sitemap/2 returns 400, so no true date is
+    recoverable. Validating `published` and `year` independently let the bad
+    string survive in `published` while `year` went NULL, and every consumer
+    that re-parsed `published` reintroduced year 2. Null them together or not at
+    all; the verbatim upstream value stays in the `raw` table for audit.
+    """
+    if not iso:
+        return None, None
+    y = year_of(iso)
+    return (iso, y) if y is not None else (None, None)
 
 
 def issue_label(*texts: Optional[str]) -> Optional[str]:
@@ -409,6 +440,7 @@ def harvest_substack_api(conn: sqlite3.Connection, limit: int = 50) -> int:
             slug = p.get("slug") or str(p.get("id"))
             subtitle = p.get("subtitle")
             pub = p.get("post_date")
+            pub_clean, pub_year = sanitize_published(pub)
             tags = "; ".join(filter(None, (t.get("name") for t in (p.get("postTags") or []))))
             rec = {
                 "key": f"substack:{slug}",
@@ -419,8 +451,8 @@ def harvest_substack_api(conn: sqlite3.Connection, limit: int = 50) -> int:
                 "title": strip_tags(p.get("title")),
                 "subtitle": strip_tags(subtitle),
                 "authors": authors_from(p.get("publishedBylines"), subtitle),
-                "published": pub,
-                "year": year_of(pub),
+                "published": pub_clean,
+                "year": pub_year,
                 "item_type": p.get("type"),
                 "access": p.get("audience") or "unknown",
                 "section": p.get("section_name"),
@@ -469,6 +501,7 @@ def harvest_wp(conn: sqlite3.Connection) -> int:
             for p in data:
                 pid = p.get("id")
                 pub = p.get("date_gmt") or p.get("date")
+                pub_clean, pub_year = sanitize_published(pub)
                 title = strip_tags((p.get("title") or {}).get("rendered"))
                 rec = {
                     "key": f"wp:{ptype}:{pid}",
@@ -479,8 +512,8 @@ def harvest_wp(conn: sqlite3.Connection) -> int:
                     "title": title,
                     "subtitle": clip(strip_tags((p.get("excerpt") or {}).get("rendered")), 400),
                     "authors": authors.get(p.get("author"), ""),
-                    "published": pub,
-                    "year": year_of(pub),
+                    "published": pub_clean,
+                    "year": pub_year,
                     "item_type": f"wp-{ptype[:-1] if ptype.endswith('s') else ptype}",
                     "access": "everyone",
                     "section": ptype,

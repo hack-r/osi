@@ -34,6 +34,8 @@ import json
 import os
 import re
 import sqlite3
+
+import osi_harvest
 import unicodedata
 from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple
@@ -173,7 +175,8 @@ def text_filename(row: Dict[str, Any]) -> str:
     which make the name unique and traceable back to `items.key`.
     """
     date = (row.get("published") or "")[:10]
-    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+    m = re.match(r"^(\d{4})-\d{2}-\d{2}$", date)
+    if not m or not (osi_harvest.YEAR_MIN <= int(m.group(1)) <= osi_harvest.YEAR_MAX):
         date = f"{row['year']}-00-00" if row.get("year") else "undated"
     src = row.get("source") or "unknown"
     ident = slugify(str(row.get("source_id") or row.get("slug") or "x"), 40)

@@ -40,6 +40,8 @@ import json
 import os
 import re
 import sqlite3
+
+import osi_harvest
 from typing import Any, Dict, List, Optional
 
 COLUMNS = ["key", "source", "source_id", "url", "slug", "title", "subtitle", "authors",
@@ -108,9 +110,15 @@ def _csl_authors(s: Optional[str]) -> List[dict]:
 
 
 def _date_parts(published: Optional[str], year: Optional[int]) -> List[List[int]]:
+    """CSL date-parts. Range-checks the year rather than trusting `published`.
+
+    Without the guard an implausible upstream date such as "0002-09-01" parsed
+    straight through to `[[2, 9, 1]]`, which is how year 2 reached the Zotero
+    export even though `year_of` had already rejected it at harvest time.
+    """
     if published:
         m = re.match(r"(\d{4})-(\d{2})-(\d{2})", published)
-        if m:
+        if m and osi_harvest.YEAR_MIN <= int(m.group(1)) <= osi_harvest.YEAR_MAX:
             return [[int(x) for x in m.groups()]]
     return [[year]] if year else []
 
