@@ -884,6 +884,14 @@ summary(stm_model) #stm_model$theta
 # Topic labels and representative words
 topic_labels <- stm::labelTopics(stm_model, n = N_TOP_TERMS)
 
+custom_labels <- c(
+  "War & American History",
+  "OSI Activities",
+  "Psychology & Lifestyle",
+  "Science",
+  "Moral Philosophy"
+)
+
 topic_terms <- tibble(
   topic = seq_len(STM_K),
   probability = apply(
@@ -912,9 +920,9 @@ topic_terms <- tibble(
   )
 )
 
-write_csv(
+write.csv(
   topic_terms,
-  file.path(DATA_DIR, "topics", "topic_terms.csv")
+  paste0(DATA_DIR, "/topics/", "topic_terms.csv")
 )
 
 # Plot the first N FREX words for every topic
@@ -924,7 +932,7 @@ frex_plot_data <- map_dfr(
   seq_len(STM_K),
   function(topic_number) {
     tibble(
-      topic = paste("Topic", topic_number),
+      topic = custom_labels[topic_number], #paste("Topic", topic_number),
       term = topic_labels$frex[topic_number, seq_len(n_terms)],
       rank = n_terms:1
     )
@@ -962,7 +970,6 @@ ggsave(
 )
 
 # Overall topic prevalence
-
 topic_prevalence <- tibble(
   topic = seq_len(STM_K),
   mean_proportion = colMeans(stm_model$theta)
@@ -977,7 +984,7 @@ write_csv(
 prevalence_plot <- ggplot(
   topic_prevalence,
   aes(
-    x = reorder(paste("Topic", topic), mean_proportion),
+    x = reorder(custom_labels[topic], mean_proportion),
     y = mean_proportion
   )
 ) +
@@ -1101,15 +1108,6 @@ document_topics_long <- document_topics |>
     year = as.integer(year)
   )
 
-custom_labels <- c(
-  "Policy",
-  "Epistemology",
-  "Geo-politics",
-  "Reason, morality, atheism",
-  "Science",
-  "Individualism"
-)
-
 if (length(custom_labels) != STM_K) {
   custom_labels <- paste("Topic", seq_len(STM_K))
 }
@@ -1320,252 +1318,6 @@ ggsave(
 )
 
 # Topic and Author Trends over Time ---------------------------------------
-document_topics <- document_topics |>
-  left_join(
-    stm_data |>
-      select(
-        doc_id,
-        author,
-        publication,
-        year
-      ),
-    by = "doc_id"
-  ) |>
-  mutate(
-    author = safe_group_value(author),
-    publication = safe_group_value(publication),
-    year = as.integer(year)
-  )
-
-document_topics_long <- document_topics |>
-  pivot_longer(
-    cols = starts_with("topic_"),
-    names_to = "topic",
-    values_to = "topic_proportion"
-  ) |>
-  mutate(
-    topic_number = readr::parse_number(topic),
-    topic_label = paste("Topic", topic_number),
-    year = as.integer(year)
-  )
-
-custom_labels <- c(
-  "Policy",
-  "Epistemology",
-  "Geo-politics",
-  "Reason, morality, atheism",
-  "Science",
-  "Individualism"
-)
-
-if (length(custom_labels) != STM_K) {
-  custom_labels <- paste("Topic", seq_len(STM_K))
-}
-
-topic_lookup <- tibble(
-  topic_number = seq_len(STM_K),
-  topic_label = custom_labels,
-  frex_terms = purrr::map_chr(
-    seq_len(STM_K),
-    function(i) {
-      paste(
-        topic_labels$frex[
-          i,
-          seq_len(min(5, ncol(topic_labels$frex)))
-        ],
-        collapse = ", "
-      )
-    }
-  )
-)
-
-document_topics_metadata_check <- document_topics |>
-  summarise(
-    documents = n(),
-    missing_authors = sum(
-      is.na(author) | author == "Unknown"
-    ),
-    missing_years = sum(is.na(year)),
-    missing_publications = sum(
-      is.na(publication) | publication == "Unknown"
-    )
-  )
-
-write_csv(
-  document_topics_metadata_check,
-  file.path(
-    DATA_DIR,
-    "topics",
-    "document_topics_metadata_check.csv"
-  )
-)
-
-topic_summary_table <- topic_prevalence |>
-  left_join(
-    topic_lookup,
-    by = c("topic" = "topic_number")
-  ) |>
-  arrange(desc(mean_proportion)) |>
-  mutate(
-    Rank = row_number(),
-    `Mean prevalence` = scales::percent(
-      mean_proportion,
-      accuracy = 0.1
-    )
-  ) |>
-  transmute(
-    Rank,
-    Topic = topic_label,
-    `Representative FREX terms` = frex_terms,
-    `Mean prevalence`
-  )
-
-table_topics <- make_osi_table(
-  topic_summary_table,
-  title = "STM topic summary",
-  subtitle = "Topics ranked by average document prevalence"
-)
-
-save_osi_table_png(
-  table_topics,
-  "table_06_topic_summary.html"
-)
-
-write_csv(
-  topic_summary_table,
-  file.path(
-    DATA_DIR,
-    "topics",
-    "topic_summary_table.csv"
-  )
-)
-
-document_topics_long <- document_topics_long |>
-  mutate(
-    topic_label = factor(
-      custom_labels[topic_number],
-      levels = custom_labels
-    )
-  )
-
-topic_by_year <- document_topics_long |>
-  filter(!is.na(year)) |>
-  group_by(
-    year,
-    topic_number,
-    topic_label
-  ) |>
-  summarise(
-    mean_proportion = mean(
-      topic_proportion,
-      na.rm = TRUE
-    ),
-    documents = n_distinct(doc_id),
-    .groups = "drop"
-  ) |>
-  mutate(
-    topic_label = factor(
-      topic_label,
-      levels = custom_labels
-    )
-  )
-
-write_csv(
-  topic_by_year |>
-    mutate(topic_label = as.character(topic_label)),
-  file.path(
-    DATA_DIR,
-    "topics",
-    "topic_prevalence_by_year.csv"
-  )
-)
-
-leading_topic_by_year <- topic_by_year |>
-  group_by(year) |>
-  slice_max(
-    order_by = mean_proportion,
-    n = 1,
-    with_ties = FALSE
-  ) |>
-  ungroup() |>
-  left_join(
-    topic_lookup |>
-      select(topic_number, frex_terms),
-    by = "topic_number"
-  ) |>
-  transmute(
-    Year = year,
-    `Leading topic` = as.character(topic_label),
-    `Mean prevalence` = scales::percent(
-      mean_proportion,
-      accuracy = 0.1
-    ),
-    `Representative FREX terms` = frex_terms,
-    Documents = documents
-  )
-
-table_leading_topics <- make_osi_table(
-  leading_topic_by_year,
-  title = "Leading topic by year",
-  subtitle = paste(
-    "The most prevalent STM topic in each",
-    "publication year"
-  )
-)
-
-save_osi_table_png(
-  table_leading_topics,
-  "table_07_leading_topic_by_year.html"
-)
-
-topic_trend_plot <- ggplot(
-  topic_by_year,
-  aes(
-    x = year,
-    y = mean_proportion,
-    color = topic_label,
-    group = topic_label
-  )
-) +
-  geom_line(linewidth = 0.9) +
-  geom_point(size = 1.8) +
-  scale_y_continuous(
-    labels = scales::percent_format(
-      accuracy = 1
-    )
-  ) +
-  scale_color_brewer(
-    palette = "Dark2",
-    drop = FALSE
-  ) +
-  labs(
-    title = "Topic prevalence over time",
-    subtitle = paste(
-      "Average document-level topic proportions",
-      "by publication year"
-    ),
-    x = NULL,
-    y = "Mean topic proportion",
-    color = "Topic"
-  ) +
-  theme_minimal(base_size = 11) +
-  theme(
-    legend.position = "bottom",
-    panel.grid.minor = element_blank()
-  )
-
-print(topic_trend_plot)
-
-ggsave(
-  file.path(
-    FIGURE_DIR,
-    "topic_prevalence_over_time.png"
-  ),
-  topic_trend_plot,
-  width = 12,
-  height = 8,
-  dpi = 300
-)
 
 if (exists("topic_heatmap", inherits = FALSE)) {
   rm(topic_heatmap)
@@ -1593,7 +1345,7 @@ topic_heatmap <- ggplot(
   labs(
     title = "Topic prevalence by year",
     subtitle = paste(
-      "Darker cells indicate greater average",
+      "Lighter cells indicate greater average",
       "topic prevalence"
     ),
     x = NULL,
@@ -1605,188 +1357,6 @@ topic_heatmap <- ggplot(
   )
 
 print(topic_heatmap)
-
-ggsave(
-  file.path(
-    FIGURE_DIR,
-    "topic_prevalence_heatmap.png"
-  ),
-  topic_heatmap,
-  width = 12,
-  height = 8,
-  dpi = 300
-)
-
-author_levels <- sort(unique(top_authors))
-
-heatmap_years <- seq(
-  min(author_by_year_top$year, na.rm = TRUE),
-  max(author_by_year_top$year, na.rm = TRUE)
-)
-
-author_heatmap_data <- author_by_year_top |>
-  tidyr::complete(
-    author = author_levels,
-    year = heatmap_years,
-    fill = list(articles = 0)
-  ) |>
-  mutate(
-    author = factor(
-      author,
-      levels = rev(author_levels)
-    ),
-    articles = replace_na(articles, 0)
-  )
-
-author_heatmap <- ggplot(
-  author_heatmap_data,
-  aes(
-    x = year,
-    y = author,
-    fill = articles
-  )
-) +
-  geom_tile(
-    color = "white",
-    linewidth = 0.3
-  ) +
-  scale_fill_gradient(
-    low = "white",
-    high = "#D7301F",
-    trans = "sqrt",
-    breaks = scales::pretty_breaks(n = 5),
-    name = "Articles"
-  ) +
-  scale_x_continuous(
-    breaks = scales::pretty_breaks(n = 10),
-    expand = expansion(add = 0)
-  ) +
-  labs(
-    title = "Author presence over time",
-    subtitle = paste(
-      "Number of articles by year for leading authors;",
-      "authors shown in alphabetical order"
-    ),
-    x = NULL,
-    y = NULL
-  ) +
-  theme_minimal(base_size = 11) +
-  theme(
-    panel.grid = element_blank(),
-    axis.text.y = element_text(size = 9),
-    legend.position = "right"
-  )
-
-print(author_heatmap)
-
-ggsave(
-  file.path(
-    FIGURE_DIR,
-    "author_presence_over_time.png"
-  ),
-  author_heatmap,
-  width = 12,
-  height = 8,
-  dpi = 300
-)
-
-author_topic <- document_topics_long |>
-  filter(
-    !is.na(author),
-    author != "",
-    author != "Unknown",
-    author %in% top_authors
-  ) |>
-  group_by(
-    author,
-    topic_number,
-    topic_label
-  ) |>
-  summarise(
-    mean_proportion = mean(
-      topic_proportion,
-      na.rm = TRUE
-    ),
-    documents = n_distinct(doc_id),
-    .groups = "drop"
-  ) |>
-  mutate(
-    topic_label = factor(
-      topic_label,
-      levels = custom_labels
-    )
-  )
-
-write_csv(
-  author_topic |>
-    mutate(topic_label = as.character(topic_label)),
-  file.path(
-    DATA_DIR,
-    "topics",
-    "author_topic_associations.csv"
-  )
-)
-
-author_levels <- sort(unique(as.character(author_topic$author)))
-
-author_topic <- author_topic |>
-  mutate(
-    author = factor(
-      author,
-      levels = rev(author_levels)
-    )
-  )
-
-author_topic_plot <- ggplot(
-  author_topic,
-  aes(
-    x = author,
-    y = mean_proportion,
-    fill = topic_label
-  )
-) +
-  geom_col(
-    position = "stack"
-  ) +
-  coord_flip() +
-  scale_y_continuous(
-    labels = scales::percent_format(
-      accuracy = 1
-    )
-  ) +
-  scale_fill_brewer(
-    palette = "Dark2",
-    drop = FALSE
-  ) +
-  labs(
-    title = "Topic composition of leading authors",
-    subtitle = paste(
-      "Average STM topic proportions across each author's documents;",
-      "authors shown in alphabetical order"
-    ),
-    x = NULL,
-    y = "Mean topic proportion",
-    fill = "Topic"
-  ) +
-  theme_minimal(base_size = 11) +
-  theme(
-    legend.position = "bottom",
-    panel.grid.minor = element_blank()
-  )
-
-print(author_topic_plot)
-
-ggsave(
-  file.path(
-    FIGURE_DIR,
-    "author_topic_composition.png"
-  ),
-  author_topic_plot,
-  width = 12,
-  height = 8,
-  dpi = 300
-)
-
 
 ggsave(
   file.path(
