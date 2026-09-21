@@ -1,0 +1,73 @@
+author,topic_number,topic_label,mean_proportion,documents
+Andrew Bernstein,1,Policy,0.16447647158845588,26
+Andrew Bernstein,2,Epistemology,0.13732169703573222,26
+Andrew Bernstein,3,Geo-politics,0.3239819881168882,26
+Andrew Bernstein,4,"Reason, morality, atheism",0.10643402072821964,26
+Andrew Bernstein,5,Science,0.15498514043616557,26
+Andrew Bernstein,6,Individualism,0.11280068209453853,26
+Angelica Werth,1,Policy,0.1670544186484969,39
+Angelica Werth,2,Epistemology,0.18271027146727534,39
+Angelica Werth,3,Geo-politics,0.2573749218044967,39
+Angelica Werth,4,"Reason, morality, atheism",0.12117498872781712,39
+Angelica Werth,5,Science,0.15433073886103799,39
+Angelica Werth,6,Individualism,0.11735466049087594,39
+Ari Armstrong,1,Policy,0.14410073304316617,126
+Ari Armstrong,2,Epistemology,0.13293161618064067,126
+Ari Armstrong,3,Geo-politics,0.3196347554587009,126
+Ari Armstrong,4,"Reason, morality, atheism",0.13632107226287749,126
+Ari Armstrong,5,Science,0.125064469918791,126
+Ari Armstrong,6,Individualism,0.14194735313582374,126
+Craig Biddle,1,Policy,0.12058414362721288,360
+Craig Biddle,2,Epistemology,0.1374864536612981,360
+Craig Biddle,3,Geo-politics,0.27267421143671294,360
+Craig Biddle,4,"Reason, morality, atheism",0.16821036580244356,360
+Craig Biddle,5,Science,0.12294669704643418,360
+Craig Biddle,6,Individualism,0.1780981284258983,360
+Daniel Wahl,1,Policy,0.16931270120265055,46
+Daniel Wahl,2,Epistemology,0.16530971687153698,46
+Daniel Wahl,3,Geo-politics,0.2858721754039121,46
+Daniel Wahl,4,"Reason, morality, atheism",0.11783444489269351,46
+Daniel Wahl,5,Science,0.15311857043389537,46
+Daniel Wahl,6,Individualism,0.10855239119531153,46
+Jon Hersey,1,Policy,0.1577495494343332,123
+Jon Hersey,2,Epistemology,0.15785047213825634,123
+Jon Hersey,3,Geo-politics,0.29715082305322144,123
+Jon Hersey,4,"Reason, morality, atheism",0.12081832074587294,123
+Jon Hersey,5,Science,0.14621494664255558,123
+Jon Hersey,6,Individualism,0.12021588798576051,123
+Lisa VanDamme,1,Policy,0.16764336147777006,26
+Lisa VanDamme,2,Epistemology,0.20233081037840533,26
+Lisa VanDamme,3,Geo-politics,0.20421271785904666,26
+Lisa VanDamme,4,"Reason, morality, atheism",0.12533298661773956,26
+Lisa VanDamme,5,Science,0.191538288836851,26
+Lisa VanDamme,6,Individualism,0.1089418348301874,26
+Michael A. LaFerrara,1,Policy,0.13163257731370887,28
+Michael A. LaFerrara,2,Epistemology,0.11147294695776999,28
+Michael A. LaFerrara,3,Geo-politics,0.4185652559570938,28
+Michael A. LaFerrara,4,"Reason, morality, atheism",0.11087206658166868,28
+Michael A. LaFerrara,5,Science,0.10721969046747822,28
+Michael A. LaFerrara,6,Individualism,0.12023746272228043,28
+Robert Begley,1,Policy,0.15581855598920924,17
+Robert Begley,2,Epistemology,0.13491039564292878,17
+Robert Begley,3,Geo-politics,0.3817754623460906,17
+Robert Begley,4,"Reason, morality, atheism",0.09777943057031636,17
+Robert Begley,5,Science,0.1314897073572978,17
+Robert Begley,6,Individualism,0.09822644809415716,17
+Thomas F. Walker,1,Policy,0.1722424535755196,85
+Thomas F. Walker,2,Epistemology,0.14853545782035849,85
+Thomas F. Walker,3,Geo-politics,0.3169887684525527,85
+Thomas F. Walker,4,"Reason, morality, atheism",0.10594344814296532,85
+Thomas F. Walker,5,Science,0.1478108091408212,85
+Thomas F. Walker,6,Individualism,0.10847906286778268,85
+Tim White,1,Policy,0.1881455698723959,34
+Tim White,2,Epistemology,0.1641899968705052,34
+Tim White,3,Geo-politics,0.2779272131500214,34
+Tim White,4,"Reason, morality, atheism",0.10743127429249379,34
+Tim White,5,Science,0.16185731743997608,34
+Tim White,6,Individualism,0.10044862837460769,34
+Timothy Sandefur,1,Policy,0.1713554723363097,91
+Timothy Sandefur,2,Epistemology,0.14898276629626106,91
+Timothy Sandefur,3,Geo-politics,0.3436514503825982,91
+Timothy Sandefur,4,"Reason, morality, atheism",0.09082352904274481,91
+Timothy Sandefur,5,Science,0.15796263758786058,91
+Timothy Sandefur,6,Individualism,0.08722414435422565,91

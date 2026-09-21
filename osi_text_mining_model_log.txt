@@ -1,0 +1,58 @@
+OSI STM Model Settings Log
+
+1. Memory crashed
+  12 topics
+  max.em.its = 75
+  No stemming
+  Crashed without   lower.thresh
+  Crashed with   lower.thresh = 5 and 10
+
+2. Finished, moderate interpretability [big change, just to see if it's possible not to crash]
+
+  lower.thresh = 10
+  6 topics 
+  Stemming
+  max.em.its = 10
+   
+3. Finished, less interpretable with 12 topics
+
+  12 topics
+  max.em.its = 10
+  Stemming
+  lower.thresh = 10
+
+4. Better without stemming at 6 topics, still not great tho
+  6 topics
+  max.em.its = 10
+  No stemming
+  lower.thresh = 10
+  
+5. More iterations changed the result, but it still finished so will use at least 25 from now on    
+  6 topics
+  max.em.its = 25
+  No stemming
+  lower.thresh = 10
+  
+  
+Seems there's some randomness even though we set the seed. Is it because of random init? I will test.  
+  
+6. Spectral took a lot longer to finish than Random init but it does in fact lead to consistent results. The topics are interpretable.
+  Spectral init (all others since #2 were Ranom)
+  6 topics
+  max.em.its = 25
+  No stemming
+  lower.thresh = 10
+  
+7. Also took longer. OK interpretability but not as good as Spectral. 
+  LDA init
+  6 topics
+  max.em.its = 25
+  No stemming
+  lower.thresh = 10  
+
+8.    
+  6 topics
+  max.em.its = 25
+  No stemming
+  lower.thresh = 10
+   

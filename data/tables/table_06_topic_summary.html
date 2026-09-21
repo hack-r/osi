@@ -1,0 +1,128 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+
+<style>
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 24px;
+  font-family: Arial, Helvetica, sans-serif;
+  color: #1D2939;
+  background: white;
+}
+
+.osi-table-title {
+  margin: 0 0 5px 0;
+  color: #17324D;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.osi-table-subtitle {
+  margin: 0 0 14px 0;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+table.osi-table {
+  width: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+table.osi-table th,
+table.osi-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid #D0D5DD;
+  vertical-align: middle;
+}
+
+table.osi-table thead th {
+  background: #17324D;
+  color: white;
+  font-weight: bold;
+  text-align: left;
+  white-space: nowrap;
+}
+
+table.osi-table tbody tr:nth-child(even) {
+  background: #F7F9FB;
+}
+
+table.osi-table tbody tr:nth-child(odd) {
+  background: white;
+}
+
+table.osi-table tbody td:first-child {
+  text-align: left;
+  white-space: normal;
+}
+
+table.osi-table tbody td:not(:first-child) {
+  text-align: right;
+  white-space: nowrap;
+}
+</style>
+
+</head>
+<body>
+<h2 class="osi-table-title">STM topic summary</h2>
+<p class="osi-table-subtitle">Topics ranked by average document prevalence</p>
+<table class="osi-table">
+ <thead>
+  <tr>
+   <th style="text-align:right;"> Rank </th>
+   <th style="text-align:left;"> Topic </th>
+   <th style="text-align:left;"> Representative FREX terms </th>
+   <th style="text-align:left;"> Mean prevalence </th>
+  </tr>
+ </thead>
+<tbody>
+  <tr>
+   <td style="text-align:right;"> 1 </td>
+   <td style="text-align:left;"> Geo-politics </td>
+   <td style="text-align:left;"> japanese, american, japan, israel, walker-werth </td>
+   <td style="text-align:left;"> 28.1% </td>
+  </tr>
+  <tr>
+   <td style="text-align:right;"> 2 </td>
+   <td style="text-align:left;"> Epistemology </td>
+   <td style="text-align:left;"> ’re, know, will, much, sense </td>
+   <td style="text-align:left;"> 16.0% </td>
+  </tr>
+  <tr>
+   <td style="text-align:right;"> 3 </td>
+   <td style="text-align:left;"> Policy </td>
+   <td style="text-align:left;"> time, day, interest, policy, high </td>
+   <td style="text-align:left;"> 14.8% </td>
+  </tr>
+  <tr>
+   <td style="text-align:right;"> 4 </td>
+   <td style="text-align:left;"> Individualism </td>
+   <td style="text-align:left;"> life, rights, values, rand, human </td>
+   <td style="text-align:left;"> 14.2% </td>
+  </tr>
+  <tr>
+   <td style="text-align:right;"> 5 </td>
+   <td style="text-align:left;"> Science </td>
+   <td style="text-align:left;"> theory, newton, motion, law, laws </td>
+   <td style="text-align:left;"> 13.9% </td>
+  </tr>
+  <tr>
+   <td style="text-align:right;"> 6 </td>
+   <td style="text-align:left;"> Reason, morality, atheism </td>
+   <td style="text-align:left;"> moral, right, reason, others, god </td>
+   <td style="text-align:left;"> 13.0% </td>
+  </tr>
+</tbody>
+</table>
+</body>
+</html>
