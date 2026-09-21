@@ -50,9 +50,30 @@ Seems there's some randomness even though we set the seed. Is it because of rand
   No stemming
   lower.thresh = 10  
 
-8.    
-  6 topics
+8. Memory crash.    
+  Spectral
+  4 or 6 topics
   max.em.its = 25
   No stemming
   lower.thresh = 10
-   
+  
+9. It looks like the stopwords needs some boosting. The first topic isn't that clean.    
+  Spectral
+  4 topics
+  max.em.its = 15
+  No stemming
+  lower.thresh = 10
+  
+10. Crashed
+  Spectral
+  5 topics
+  max.em.its = 15
+  No stemming
+  lower.thresh = 8
+  
+10. 
+  Spectral
+  5 topics
+  max.em.its = 12
+  No stemming
+  lower.thresh = 8  

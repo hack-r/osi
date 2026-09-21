@@ -66,7 +66,7 @@ NGRAM_MAX      <- 3
 SKIPGRAM_MAX_N    <- 2
 SKIPGRAM_MAX_SKIP <- 2
 
-N_TOP_TERMS       <- 15
+N_TOP_TERMS       <- 10 #15
 N_WORDCLOUD_TERMS <- 75
 
 #STM_K             <- 6 # set it by the modeling step
@@ -834,17 +834,21 @@ stm_data <- stm_data |>
   )
 
 # Preprocess text for STM
-# STM expects token counts, not TF-IDF values
 processed <- stm::textProcessor(
   documents = stm_data$text_clean,
   metadata  = stm_data |>
     select(doc_id, year, section_model),
-  lowercase       = TRUE,
-  removestopwords = TRUE,
-  removenumbers   = TRUE,
+  lowercase         = TRUE,
+  removestopwords   = TRUE,
+  removenumbers     = TRUE,
   removepunctuation = TRUE,
   stem              = F,
-  wordLengths = c(3, 20)
+  ucp               = T,
+  wordLengths       = c(3, 20),
+  customstopwords   = c("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+                             "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+                             "eighteen", "nineteen", "twenty", "now", "can",
+                             "said", "also")
 )
 
 prepared <- stm::prepDocuments(
@@ -857,7 +861,7 @@ prepared <- stm::prepDocuments(
 # Fit the structural topic model
 set.seed(42)
 
-STM_K <- 6
+STM_K <- 5
 
 stm_model <- stm::stm(
   documents  = prepared$documents,
@@ -865,8 +869,8 @@ stm_model <- stm::stm(
   K          = STM_K,
   prevalence = ~ year + section_model,
   data       = prepared$meta,
-  max.em.its = 25, # 75
-  init.type  = "LDA", # Spectral
+  max.em.its = 12,         # 10 25 75
+  init.type  = "Spectral", # Spectral Random LDA
   verbose    = FALSE
 )
 
@@ -1067,7 +1071,6 @@ write_csv(
   file.path(DATA_DIR, "topics", "document_topic_proportions.csv")
 )
 
-# Topic and Author Trends over Time ---------------------------------------
 # Topic and Author Trends over Time ---------------------------------------
 document_topics <- document_topics |>
   left_join(
