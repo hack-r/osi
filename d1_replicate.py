@@ -132,6 +132,42 @@ def table_columns(db: D1, table: str) -> List[str]:
     return [r["name"] for r in rows]
 
 
+def load_order(db: D1, tables: List[str]) -> List[str]:
+    """Order tables so every parent loads before its children.
+
+    `PRAGMA defer_foreign_keys` lasts only for the transaction that sets it,
+    and each HTTP request here is its own transaction -- so the pragma cannot
+    hold rows back across the many INSERTs a copy takes. Loading parents first
+    is what actually satisfies the constraints: `authors.person_id` references
+    `people`, `articles.org_id` references `orgs`, and so on.
+
+    Cycles (and self-references, which SQLite allows) fall back to source
+    order rather than raising, since a cycle cannot be satisfied by ordering
+    alone and the copy may still succeed row by row.
+    """
+    deps: Dict[str, set] = {t: set() for t in tables}
+    known = set(tables)
+    for t in tables:
+        for fk in db.rows(f'PRAGMA foreign_key_list("{t}")'):
+            parent = fk.get("table")
+            if parent in known and parent != t:
+                deps[t].add(parent)
+
+    ordered: List[str] = []
+    placed = set()
+    # Kahn's algorithm, ties broken by the source ordering for reproducibility.
+    while len(ordered) < len(tables):
+        ready = [t for t in tables
+                 if t not in placed and deps[t] <= placed]
+        if not ready:                      # cycle: emit the rest as-is
+            ordered.extend(t for t in tables if t not in placed)
+            break
+        for t in ready:
+            ordered.append(t)
+            placed.add(t)
+    return ordered
+
+
 def rows_per_insert(ncols: int) -> int:
     """Keep each INSERT under the bound-parameter ceiling."""
     if ncols <= 0:
@@ -260,11 +296,12 @@ def main() -> int:
             if verbose and schema[kind]:
                 print(f"  created {len(schema[kind])} {kind}s")
 
-        # Data. FKs deferred so parents/children can load in any order.
-        dst.query("PRAGMA defer_foreign_keys = true")
+        # Data, parents before children. Each request is its own transaction,
+        # so a deferral pragma would not survive to the next INSERT.
+        order = load_order(src, tables)
         if verbose:
             print("  copying rows")
-        for t in tables:
+        for t in order:
             copy_table(src, dst, t, verbose)
 
         # Verify: per-table counts must match exactly.
