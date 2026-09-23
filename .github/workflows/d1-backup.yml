@@ -9,6 +9,14 @@ on:
     - cron: '17 8 * * *'   # 08:17 UTC daily
   workflow_dispatch:        # manual run from the Actions tab
 
+# A run drops and rebuilds the target, so two overlapping runs would interleave
+# their DROPs, CREATEs and INSERTs and could leave a mixed result that still
+# verifies. Queue them instead; cancel-in-progress would abort a run midway
+# through the rebuild, which is the state we least want to leave behind.
+concurrency:
+  group: d1-backup
+  cancel-in-progress: false
+
 jobs:
   replicate:
     runs-on: ubuntu-latest

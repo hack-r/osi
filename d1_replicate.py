@@ -61,7 +61,16 @@ class D1:
         self.database_id = database_id
 
     def query(self, sql: str, params: Optional[List[Any]] = None,
-              retries: int = 4) -> List[dict]:
+              idempotent: bool = False, retries: int = 4) -> List[dict]:
+        """Run `sql`. Only retries when the caller says replaying is safe.
+
+        A 5xx, a 429 or a dropped connection does not tell us whether the
+        statement committed -- only that we did not see the response. Replaying
+        a write on that evidence can insert a batch twice or trip a UNIQUE
+        constraint, and either way the run ends up neither clean nor cleanly
+        failed. So writes get one attempt and surface the error; reads, which
+        replay harmlessly, get the backoff.
+        """
         payload = {"sql": sql}
         if params:
             payload["params"] = params
@@ -71,8 +80,9 @@ class D1:
             headers={"Authorization": f"Bearer {self.token}",
                      "Content-Type": "application/json"})
 
+        attempts = retries if idempotent else 0
         delay = 2.0
-        for attempt in range(retries + 1):
+        for attempt in range(attempts + 1):
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read())
@@ -80,13 +90,13 @@ class D1:
             except urllib.error.HTTPError as e:
                 detail = e.read().decode("utf-8", "replace")[:500]
                 # 429/5xx are worth retrying; 4xx client errors are not.
-                if e.code in (429, 500, 502, 503, 504) and attempt < retries:
+                if e.code in (429, 500, 502, 503, 504) and attempt < attempts:
                     time.sleep(delay)
                     delay *= 2
                     continue
                 raise D1Error(f"HTTP {e.code} on {self.database_id}: {detail}")
             except urllib.error.URLError as e:
-                if attempt < retries:
+                if attempt < attempts:
                     time.sleep(delay)
                     delay *= 2
                     continue
@@ -99,7 +109,8 @@ class D1:
         return data.get("result", [])
 
     def rows(self, sql: str, params: Optional[List[Any]] = None) -> List[dict]:
-        result = self.query(sql, params)
+        # Reads are safe to replay, so these carry the retry budget.
+        result = self.query(sql, params, idempotent=True)
         return result[0].get("results", []) if result else []
 
     def scalar(self, sql: str) -> Any:
@@ -209,29 +220,33 @@ def copy_table(src: D1, dst: D1, table: str, verbose: bool = True) -> int:
 
 
 def drop_existing(dst: D1, verbose: bool = True) -> None:
-    """Clear the target. Views first, then tables, so no view outlives its table.
+    """Clear the target in a single request, so the FK deferral actually holds.
 
-    Foreign keys are deferred for the whole teardown: `article_tags` and
-    `article_authors` declare ON DELETE CASCADE against `articles`, and
-    dropping tables in any order with enforcement on risks silently cascading.
+    `PRAGMA defer_foreign_keys` lasts only for the transaction that sets it, and
+    one HTTP request is one transaction -- so the pragma and every DROP have to
+    travel together. Issued as separate requests the pragma would be gone by the
+    first DROP, and `article_tags`/`article_authors` (ON DELETE CASCADE against
+    `articles`) could cascade rows away mid-teardown.
+
+    Triggers and views go before tables so nothing outlives what it references;
+    indexes are dropped with IF EXISTS because a table's own indexes disappear
+    with it.
     """
     rows = dst.rows(
         "SELECT type, name FROM sqlite_master "
         "WHERE type IN ('view','table','index','trigger') "
         "AND name NOT LIKE 'sqlite_%'")
-    dst.query("PRAGMA defer_foreign_keys = true")
+
+    stmts = ["PRAGMA defer_foreign_keys = true"]
     for kind in ("trigger", "view", "index", "table"):
-        for r in rows:
-            if r["type"] != kind or r["name"] in SKIP_TABLES:
-                continue
-            try:
-                dst.query(f'DROP {kind.upper()} IF EXISTS "{r["name"]}"')
-            except D1Error as e:
-                # Indexes owned by a dropped table are already gone.
-                if "no such" not in str(e).lower():
-                    raise
+        stmts += [f'DROP {kind.upper()} IF EXISTS "{r["name"]}"'
+                  for r in rows
+                  if r["type"] == kind and r["name"] not in SKIP_TABLES]
+
+    if len(stmts) > 1:
+        dst.query("; ".join(stmts) + ";")
     if verbose:
-        print(f"  dropped {len(rows)} existing objects")
+        print(f"  dropped {len(stmts) - 1} existing objects")
 
 
 def counts(db: D1, tables: Iterable[str]) -> Dict[str, int]:
