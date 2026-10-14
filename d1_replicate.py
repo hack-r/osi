@@ -28,14 +28,22 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional
 
 API_ROOT = "https://api.cloudflare.com/client/v4"
 
-# Defaults for this project. Override with --source/--target.
+# Source default for this project; override with --source.
 SOURCE_DEFAULT = "82c55bae-2ae2-4502-bd8e-1a790ba981c4"  # whoneedsit
-TARGET_DEFAULT = "104526a8-4e12-4147-997e-1fe9ceff02e9"  # whoneedsit-backup
+
+# The target has no default on purpose. It used to be a hardcoded uuid for a
+# database named whoneedsit-backup; that database was later deleted, leaving a
+# uuid that 404s. A backup job whose destination silently stops existing is
+# worse than one that refuses to start, so the target must now be named
+# explicitly -- as a uuid via --target/D1_TARGET, or by name via
+# --target-name/D1_TARGET_NAME, which is resolved at run time and cannot rot.
+TARGET_DEFAULT = None
 
 # Internal D1 bookkeeping table: present in every database, never ours to copy.
 SKIP_TABLES = {"_cf_KV", "sqlite_sequence"}
@@ -49,6 +57,45 @@ PAGE_ROWS = 500
 
 class D1Error(RuntimeError):
     pass
+
+
+def resolve_database(account_id: str, token: str, name: str) -> str:
+    """Return the uuid of the account's database called `name`.
+
+    Looking the target up by name each run is what stops the destination from
+    rotting: a uuid outlives nothing but itself, whereas the name is what a
+    person recreates a database under. Refuses rather than guesses when the
+    name is missing or ambiguous, because the caller is about to drop and
+    rebuild whatever comes back.
+    """
+    url = (f"{API_ROOT}/accounts/{account_id}/d1/database"
+           f"?name={urllib.parse.quote(name)}&per_page=100")
+    req = urllib.request.Request(
+        url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "replace")[:300]
+        raise D1Error(f"HTTP {e.code} listing databases: {detail}")
+    except urllib.error.URLError as e:
+        raise D1Error(f"network error listing databases: {e}")
+
+    if not data.get("success"):
+        raise D1Error(f"listing databases failed: {data.get('errors')}")
+
+    # The filter is a substring match server-side, so match the name exactly.
+    hits = [d for d in data.get("result", []) if d.get("name") == name]
+    if not hits:
+        others = ", ".join(sorted(d.get("name", "?")
+                                  for d in data.get("result", []))) or "none"
+        raise D1Error(f"no database named {name!r} in this account "
+                      f"(near matches: {others}) -- create it first, or pass "
+                      f"an existing --target uuid")
+    if len(hits) > 1:
+        raise D1Error(f"{len(hits)} databases named {name!r}; pass --target "
+                      f"with the uuid you mean")
+    return hits[0]["uuid"]
 
 
 class D1:
@@ -257,7 +304,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", default=os.environ.get("D1_SOURCE", SOURCE_DEFAULT))
-    ap.add_argument("--target", default=os.environ.get("D1_TARGET", TARGET_DEFAULT))
+    ap.add_argument("--target", default=os.environ.get("D1_TARGET", TARGET_DEFAULT),
+                    help="destination database uuid")
+    ap.add_argument("--target-name", default=os.environ.get("D1_TARGET_NAME"),
+                    help="destination database name, resolved to a uuid at run "
+                         "time; preferred over --target since it survives the "
+                         "database being recreated")
     ap.add_argument("--dry-run", action="store_true",
                     help="report source/target row counts and exit without writing")
     ap.add_argument("--quiet", action="store_true")
@@ -269,6 +321,24 @@ def main() -> int:
         print("error: set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID",
               file=sys.stderr)
         return 2
+
+    if args.target and args.target_name:
+        print("error: pass --target or --target-name, not both", file=sys.stderr)
+        return 2
+    if not args.target:
+        if not args.target_name:
+            print("error: no destination. Pass --target-name <name> (preferred) "
+                  "or --target <uuid>, or set D1_TARGET_NAME / D1_TARGET.",
+                  file=sys.stderr)
+            return 2
+        try:
+            args.target = resolve_database(account, token, args.target_name)
+        except D1Error as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        if not args.quiet:
+            print(f"resolved {args.target_name!r} -> {args.target}")
+
     if args.source == args.target:
         print("error: source and target are the same database", file=sys.stderr)
         return 2
